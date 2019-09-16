@@ -1,0 +1,401 @@
+<!--
+Paul Chaffanet
+Code permanent: CHAP23049301
+AP46370
+-->
+<html>
+<body>
+
+<script language="JavaScript">
+var MODE_DRAW = 1;
+var MODE_SELECT = 2;
+var MODE_MOVE = 3;
+var MODE_ERASE = 4;
+var mode = MODE_DRAW;
+</script>
+
+<canvas id="myCanvas" width="500" height="600" style="border:2px solid #000000;"> </canvas>
+<br/>
+<label><input type='radio' name="radio_mode" onclick='setMode(MODE_DRAW);' checked>Draw</label>
+<label><input type='radio' name="radio_mode" onclick='setMode(MODE_SELECT);'>Rectangle Select</label>
+<label><input type='radio' name="radio_mode" onclick='setMode(MODE_MOVE);'>Move Selection</label>
+<label><input type='radio' name="radio_mode" onclick='setMode(MODE_ERASE);'>Erase</label>
+<button onclick="clearButtonHandler()">Delete All</button>
+
+<script language="JavaScript">
+
+var canvas = document.getElementById("myCanvas");
+var canvas_context = canvas.getContext("2d");
+
+var mouse_drag_start_x = 0;
+var mouse_drag_start_y = 0;
+var buttonIsDown = false;
+
+// this is the set of strokes already drawn
+var arrayOfStrokes = [];
+var selectedRect = null;
+var eraseCircle = null;
+// this is the stroke currently being drawn
+var stroke = new Stroke(); // each stroke is an array of points
+var selectedStrokes = [];
+var tempSelectedStrokes = [];
+var movedStrokes = [];
+
+function Point(x,y) {
+
+	if (typeof x !== "number")
+		throw "x must be a number";
+	if (typeof y !== "number")
+		throw "y must be a number";
+
+	this.x = x;
+	this.y = y;
+}
+
+Point.prototype = {
+	equals: function(p) {
+		if (!(p instanceof Point))
+			return false;
+		return this.x === p.x && this.y === p.y;
+	},
+	clone: function() {
+		return new Point(this.x, this.y);
+	}
+}
+
+function Stroke(s = []) {
+
+	if (!(s instanceof Array))
+		throw "s must be an array";
+	s.forEach( e => function(e) {
+		if (!(e instanceof Point)) 
+			throw "s must be an array of Point";
+	});
+
+	this.points = s;
+	this.style =  "#000000";
+}
+
+Stroke.prototype = {
+	addPoint: function(p) {
+		if (!(p instanceof Point))
+			throw "p must be a Point";
+		this.points.push(p);
+	},
+	clone: function() {
+		return new Stroke(this.points.map(p => p.clone()));
+	},
+	draw: function() {
+		canvas_context.beginPath();
+		canvas_context.strokeStyle = this.style;
+		for ( var i = 0; i < this.points.length; ++i ) {
+			var x = this.points[i].x;
+			var y = this.points[i].y;
+			if ( i === 0 ) {
+				canvas_context.moveTo(x,y);
+			}
+			else {
+				canvas_context.lineTo(x,y);
+			}
+		}
+		canvas_context.stroke();
+	},
+	move: function(dx, dy) {
+		this.points.forEach( function(p) {
+			p.x += dx;
+			p.y += dy;
+		})
+	}
+}
+
+function Circle(center, r) {
+
+	if (!(center instanceof Point))
+		throw "center must be a Point";
+
+	if (typeof r !== "number")
+		throw "r must be a Number";
+
+	this.r = r;
+	this.center = center;
+}
+
+Circle.prototype = {
+	containsPoint: function(p) {
+		
+		if (!(p instanceof Point))
+			throw "p must be a Point";
+
+		const d = Math.sqrt(Math.pow(p.x - this.center.x, 2) + Math.pow(p.y - this.center.y, 2));
+		return d < this.r;
+	},
+	draw: function() {
+		canvas_context.beginPath();
+		canvas_context.arc(this.center.x, this.center.y, this.r ,0,2*Math.PI);
+		canvas_context.strokeStyle = "#ff0000";
+		canvas_context.stroke();
+	},
+	touchesStroke: function(s) {
+		if (!(s instanceof Stroke))
+			throw "s is not a Stroke";
+		for (var i = 0; i < s.points.length; i++)
+			if (this.containsPoint(s.points[i]))
+				return true;
+		return false;
+	}
+}
+
+function Rectangle(xmin, ymin, xmax, ymax) {
+
+	if (typeof xmin !== "number")
+		throw "xmin must be a number";
+	if (typeof xmax !== "number")
+		throw "xmax must be a number";
+	if (typeof ymin !== "number")
+		throw "ymin must be a number";
+	if (typeof ymax !== "number")
+		throw "ymax must be a number";
+	if  (xmax < xmin || ymax < ymin)
+        throw "Invalid rectangle";
+
+	this.xmin = xmin;
+	this.ymin = ymin;
+	this.xmax = xmax;
+	this.ymax = ymax;
+	this.strokeStyle = "#0000ff";
+}
+
+Rectangle.prototype = {
+	width: function() { return this.xmax - this.xmin; },
+	height: function() { return this.ymax - this.ymin; },
+	containsStroke: function(s) {
+		if (!(s instanceof Stroke))
+			throw "s is not a Stroke";
+		for (var i = 0; i < s.points.length; i++)
+			if (s.points[i].x < this.xmin || s.points[i].x > this.xmax || s.points[i].y < this.ymin || s.points[i].y > this.ymax)
+				return false;
+		return true;
+	},
+	draw:  function() {
+		canvas_context.strokeStyle = this.strokeStyle;
+		canvas_context.strokeRect(this.xmin, this.ymin, this.width(), this.height());	
+	}
+}
+
+function mouseDownHandler(e) {
+	buttonIsDown = true;
+	var canvas_rectangle = canvas.getBoundingClientRect();
+	var event_x = e.clientX - canvas_rectangle.left;
+	var event_y = e.clientY - canvas_rectangle.top;
+	console.log("mouse down");
+	switch ( mode ) {
+		case MODE_DRAW :
+			stroke = new Stroke();
+			stroke.addPoint(new Point(event_x, event_y))
+			break;
+		default:
+			break;
+	}
+	mouse_drag_start_x = event_x;
+	mouse_drag_start_y = event_y;
+}
+
+function mouseUpHandler(e) {
+	buttonIsDown = false;
+	var canvas_rectangle = canvas.getBoundingClientRect();
+	var event_x = e.clientX - canvas_rectangle.left;
+	var event_y = e.clientY - canvas_rectangle.top;
+	console.log("mouse up");
+
+	switch ( mode ) {
+		case MODE_DRAW :
+			if ( stroke.points.length > 2 ) {
+				arrayOfStrokes.push( stroke );
+			}
+			stroke = new Stroke();
+			break;
+		case MODE_SELECT:
+			// réinsérer les strokes désélectionnées dans arrayOfStokes, enlever les nouvelles strokes sélectionnés de arrayOfStrokes et les mettre dans selected strokes
+			if (selectedRect){
+				for ( var i = 0; i < selectedStrokes.length; i++ ){
+					if (!selectedRect.containsStroke(selectedStrokes[i])) {
+						arrayOfStrokes.push(selectedStrokes[i]);
+						selectedStrokes.splice(i, 1);
+						i--;
+					}
+				}
+			}
+
+			selectedStrokes = selectedStrokes.concat(tempSelectedStrokes);
+			tempSelectedStrokes = [];
+			selectedRect = null;
+			break;
+		case MODE_MOVE:
+			if (movedStrokes.length > 0) {
+				selectedStrokes = movedStrokes;
+				movedStrokes = [];
+			}
+			break;
+		case MODE_ERASE:
+			erase();
+			break;
+	}
+	redraw();
+}
+function mouseMoveHandler(e) {
+	var canvas_rectangle = canvas.getBoundingClientRect();
+	var event_x = e.clientX - canvas_rectangle.left;
+	var event_y = e.clientY - canvas_rectangle.top;
+
+	switch ( mode ) {
+		case MODE_DRAW :
+			if ( buttonIsDown )
+				stroke.addPoint(new Point(event_x, event_y));
+			break;
+		case MODE_SELECT:
+			if ( buttonIsDown ) {
+				xmin = Math.min( mouse_drag_start_x, event_x );
+				ymin = Math.min( mouse_drag_start_y, event_y );
+				xmax = Math.max( mouse_drag_start_x, event_x );
+				ymax = Math.max( mouse_drag_start_y, event_y );
+				
+				selectedRect = new Rectangle(xmin, ymin, xmax, ymax);
+				
+				for ( var i = 0; i < arrayOfStrokes.length; i++ ){
+					if ( selectedRect.containsStroke( arrayOfStrokes[i] ) ) {
+						tempSelectedStrokes.push( arrayOfStrokes[i] );
+						arrayOfStrokes.splice(i, 1);
+						i--;
+					}
+				}
+
+				for ( var i = 0; i < tempSelectedStrokes.length; i++ ){
+					if ( !selectedRect.containsStroke( tempSelectedStrokes[i] ) ) {
+						arrayOfStrokes.push( tempSelectedStrokes[i] );
+						tempSelectedStrokes.splice(i, 1);
+						i--;
+					}
+				}
+
+			}
+			break;
+		case MODE_MOVE :
+			if ( buttonIsDown ) {
+				movedStrokes = selectedStrokes.map(s => s.clone());
+				movedStrokes.forEach(s => s.move(event_x - mouse_drag_start_x, event_y - mouse_drag_start_y))
+			}
+			break;
+		case MODE_ERASE:
+			var center = new Point(event_x, event_y);
+			var rayon = 30;
+			eraseCircle = new Circle(center, rayon);
+			if (buttonIsDown)
+				erase();
+			break;
+		default:
+			break;
+	}
+
+	redraw();
+}
+
+function erase() {
+	for (var i = 0; i < arrayOfStrokes.length; i++) {
+		if (eraseCircle.touchesStroke(arrayOfStrokes[i])) {
+			arrayOfStrokes.splice(i, 1);
+			i--;
+		}
+	}
+}
+
+canvas.addEventListener('mousedown',mouseDownHandler);
+canvas.addEventListener('mouseup',mouseUpHandler);
+canvas.addEventListener('mousemove',mouseMoveHandler);
+
+
+
+var redraw = function() {
+	
+	canvas_context.clearRect(0, 0, canvas.width, canvas.height);
+
+	for ( let i = 0; i < arrayOfStrokes.length; ++i ) {
+		arrayOfStrokes[i].style = "#000000";
+		arrayOfStrokes[i].draw()
+	}
+
+	if ( buttonIsDown ) {
+		stroke.style = "#ff0000";
+		stroke.draw()
+
+		if (selectedRect) 
+			selectedRect.draw();
+	}
+
+	for ( let i = 0; i < tempSelectedStrokes.length; i++ ) {
+		tempSelectedStrokes[i].style = "#00a234";
+		let lineWidthBefore =  canvas_context.lineWidth;
+		canvas_context.lineWidth = 6;
+		tempSelectedStrokes[i].draw();
+		tempSelectedStrokes[i].style = "#000000";
+		canvas_context.lineWidth = lineWidthBefore;
+		tempSelectedStrokes[i].draw()
+	}
+
+	if (!(mode === MODE_MOVE && buttonIsDown)) {
+		for ( let i = 0; i < selectedStrokes.length; i++ ) {
+			selectedStrokes[i].style = "#00a234";
+			let lineWidthBefore =  canvas_context.lineWidth;
+			canvas_context.lineWidth = 6;
+			selectedStrokes[i].draw();
+			selectedStrokes[i].style = "#000000";
+			canvas_context.lineWidth = lineWidthBefore;
+			selectedStrokes[i].draw();
+		}
+	}
+
+	for ( let i = 0; i < movedStrokes.length; i++ ) {
+		movedStrokes[i].style = "#00a234";
+		let lineWidthBefore =  canvas_context.lineWidth;
+		canvas_context.lineWidth = 6;
+		movedStrokes[i].draw();
+		movedStrokes[i].style = "#000000";
+		canvas_context.lineWidth = lineWidthBefore;
+		movedStrokes[i].draw();
+	}
+
+	if (mode === MODE_ERASE && eraseCircle) {
+		eraseCircle.draw();
+	}
+}
+
+
+redraw();
+
+var setMode = function( m ) {
+	mode = m;
+	switch(m) {
+		case MODE_DRAW:
+		case MODE_ERASE:
+			// si selectedStrokes, les insérer dans arrayOfStrokes
+			for (var i = 0; i < selectedStrokes.length; i++)
+				arrayOfStrokes.push(selectedStrokes[i]);
+			selectedStrokes = [];
+		default:
+			break;
+	}
+	console.log("The current mode is " + mode );
+	redraw();
+}
+
+function clearButtonHandler() {
+	arrayOfStrokes = [];
+	selectedStrokes = [];
+	redraw();
+}
+// tous les points contenus dans le rectangle => les décrémenter ou les incrémenter en fonction de l'event y nouveaux
+// si ton down est dans le rectangle
+
+</script>
+
+</body>
+</html>
